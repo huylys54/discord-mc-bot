@@ -73,13 +73,14 @@ def get_instance():
 
 
 def _try_rcon(host: str) -> None:
-    with mcrcon.MCRcon(host, RCON_PASSWORD, port=RCON_PORT, timeout=5) as mcr:
+    with mcrcon.MCRcon(host, RCON_PASSWORD, port=RCON_PORT, timeout=10) as mcr:
         mcr.command("list")
 
 
 async def wait_for_minecraft(host: str, timeout: int = 600) -> bool:
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
         try:
             await asyncio.to_thread(_try_rcon, host)
             return True
