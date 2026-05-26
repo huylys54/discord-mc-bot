@@ -12,3 +12,5 @@ logs
 # Virtual environments
 .venv
 .env
+
+*secret.json

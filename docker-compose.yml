@@ -1,0 +1,9 @@
+services:
+  bot:
+    build:
+      context: .
+      args:
+        GCP_SECRET_FILE: ${GCP_SECRET_FILE}
+    env_file: .env
+    volumes:
+      - ./whitelist.json:/app/whitelist.json

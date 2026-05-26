@@ -21,7 +21,7 @@ RCON_PASSWORD = os.getenv("RCON_PASSWORD")
 WHITELIST_FILE = "whitelist.json"
 DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")
 
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp-key.json"
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.getenv("GCP_SECRET_FILE")
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
