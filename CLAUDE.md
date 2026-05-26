@@ -19,6 +19,7 @@ DISCORD_TOKEN=
 PROJECT_ID=
 ZONE=
 INSTANCE_NAME=
+RCON_PASSWORD=
 ```
 
 `gcp-key.json` must be present in repo root — used directly via `os.environ["GOOGLE_APPLICATION_CREDENTIALS"]`.
