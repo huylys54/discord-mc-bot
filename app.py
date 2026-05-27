@@ -73,11 +73,28 @@ def get_instance():
     )
 
 
+class _MCRcon(mcrcon.MCRcon):
+    """Signal-free MCRcon subclass safe for use in threads."""
+    def __init__(self, host, password, port=25575, tlsmode=0, timeout=0):
+        self.host = host
+        self.password = password
+        self.port = port
+        self.tlsmode = tlsmode
+        self.timeout = timeout
+        self.socket = None
+
+    def _read(self, length):
+        data = b""
+        while len(data) < length:
+            data += self.socket.recv(length - len(data))
+        return data
+
+
 def _try_rcon(host: str) -> None:
     prev = socket.getdefaulttimeout()
     socket.setdefaulttimeout(10)
     try:
-        with mcrcon.MCRcon(host, RCON_PASSWORD, port=RCON_PORT, timeout=0) as mcr:
+        with _MCRcon(host, RCON_PASSWORD, port=RCON_PORT) as mcr:
             mcr.command("list")
     finally:
         socket.setdefaulttimeout(prev)
