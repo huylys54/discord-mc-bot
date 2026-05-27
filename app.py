@@ -85,7 +85,7 @@ async def wait_for_minecraft(host: str, timeout: int = 600) -> bool:
             await asyncio.to_thread(_try_rcon, host)
             return True
         except Exception as e:
-            logger.debug(f"Minecraft not ready yet ({type(e).__name__}: {e}), retrying in 10s...")
+            logger.warning(f"Minecraft not ready yet ({type(e).__name__}: {e}), retrying in 10s...")
             await asyncio.sleep(10)
     return False
 
