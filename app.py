@@ -77,16 +77,24 @@ def _try_rcon(host: str) -> None:
         mcr.command("list")
 
 
-async def wait_for_minecraft(host: str, timeout: int = 600) -> bool:
+async def wait_for_minecraft(hosts: list[str], timeout: int = 600) -> bool:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while loop.time() < deadline:
-        try:
-            await asyncio.to_thread(_try_rcon, host)
+        results = await asyncio.gather(
+            *[asyncio.to_thread(_try_rcon, h) for h in hosts],
+            return_exceptions=True,
+        )
+        if any(r is None for r in results):
             return True
-        except Exception as e:
-            logger.warning(f"Minecraft not ready yet ({type(e).__name__}: {e}), retrying in 10s...")
-            await asyncio.sleep(10)
+        if any(isinstance(r, mcrcon.MCRconAuthenticationError) for r in results):
+            logger.error("RCON auth failed — check RCON_PASSWORD")
+            return False
+        logger.warning(f"Minecraft not ready ({[type(r).__name__ for r in results]}), retrying in 10s...")
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(10, remaining))
     return False
 
 
@@ -128,9 +136,12 @@ async def mc_start(interaction):
     await interaction.followup.send("🟢 VM started. Waiting for Minecraft to initialize...")
 
     instance = await asyncio.to_thread(get_instance)
-    external_ip = instance.network_interfaces[0].access_configs[0].nat_i_p
+    hosts = [
+        instance.network_interfaces[0].network_i_p,
+        instance.network_interfaces[0].access_configs[0].nat_i_p,
+    ]
 
-    ready = await wait_for_minecraft(external_ip)
+    ready = await wait_for_minecraft(hosts)
     if ready:
         logger.info("Minecraft server ready")
         await interaction.followup.send("✅ Minecraft server is ready! Connect now.")
