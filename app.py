@@ -90,7 +90,7 @@ async def wait_for_minecraft(hosts: list[str], timeout: int = 420) -> bool:
         if any(isinstance(r, mcrcon.MCRconException) and "authentication" in str(r).lower() for r in results):
             logger.error("RCON auth failed — check RCON_PASSWORD")
             return False
-        logger.warning(f"Minecraft not ready ({[type(r).__name__ for r in results]}), retrying in 10s...")
+        logger.warning(f"Minecraft not ready ({[(type(r).__name__, str(r)) for r in results if isinstance(r, Exception)]}), retrying in 10s...")
         remaining = deadline - loop.time()
         if remaining <= 0:
             break
