@@ -1,5 +1,6 @@
 import os
 import json
+import socket
 import asyncio
 import discord
 import mcrcon
@@ -73,8 +74,13 @@ def get_instance():
 
 
 def _try_rcon(host: str) -> None:
-    with mcrcon.MCRcon(host, RCON_PASSWORD, port=RCON_PORT, timeout=10) as mcr:
-        mcr.command("list")
+    prev = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(10)
+    try:
+        with mcrcon.MCRcon(host, RCON_PASSWORD, port=RCON_PORT, timeout=0) as mcr:
+            mcr.command("list")
+    finally:
+        socket.setdefaulttimeout(prev)
 
 
 async def wait_for_minecraft(hosts: list[str], timeout: int = 420) -> bool:
