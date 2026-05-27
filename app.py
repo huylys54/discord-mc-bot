@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import socket
 import asyncio
@@ -100,6 +101,22 @@ def _try_rcon(host: str) -> None:
         socket.setdefaulttimeout(prev)
 
 
+def _get_player_count(host: str) -> str | None:
+    prev = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(5)
+    try:
+        with _MCRcon(host, RCON_PASSWORD, port=RCON_PORT) as mcr:
+            response = mcr.command("list")
+        match = re.search(r"(\d+).*?of.*?(\d+)", response)
+        if match:
+            return f"{match.group(1)}/{match.group(2)}"
+        return None
+    except Exception:
+        return None
+    finally:
+        socket.setdefaulttimeout(prev)
+
+
 async def wait_for_minecraft(hosts: list[str], timeout: int = 420) -> bool:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
@@ -164,7 +181,7 @@ async def mc_start(interaction):
     ready = await wait_for_minecraft([external_ip])
     if ready:
         logger.info("Minecraft server ready")
-        await interaction.followup.send("✅ Minecraft server is ready! Connect now.")
+        await interaction.followup.send(f"✅ {interaction.user.mention} Minecraft server is ready! Connect now.")
     else:
         logger.warning("Minecraft did not initialize within timeout")
         await interaction.followup.send("⚠️ VM running but Minecraft didn't start in time. Check server logs.")
@@ -174,11 +191,18 @@ async def mc_start(interaction):
 @is_whitelisted()
 async def mc_status(interaction):
     logger.info(f"mc-status invoked by {interaction.user}")
-    instance = get_instance()
-    logger.debug(f"VM status: {instance.status}")
-    await interaction.response.send_message(
-        f"VM Status: **{instance.status}**"
-    )
+    await interaction.response.defer()
+    instance = await asyncio.to_thread(get_instance)
+    status = instance.status
+    logger.debug(f"VM status: {status}")
+
+    if status == "RUNNING":
+        external_ip = instance.network_interfaces[0].access_configs[0].nat_i_p
+        players = await asyncio.to_thread(_get_player_count, external_ip)
+        player_info = f" — {players} players" if players else ""
+        await interaction.followup.send(f"🟢 **{status}**{player_info}")
+    else:
+        await interaction.followup.send(f"🔴 **{status}**")
 
 
 @bot.tree.command(name="mc-stop", description="Stop Minecraft VM")
