@@ -5,7 +5,7 @@ import socket
 import asyncio
 import discord
 import mcrcon
-from discord.ext import commands
+from discord.ext import commands, tasks
 from google.cloud import compute_v1
 from dotenv import load_dotenv
 from logger import logger
@@ -22,6 +22,7 @@ RCON_PASSWORD = os.getenv("RCON_PASSWORD")
 
 WHITELIST_FILE = "whitelist.json"
 DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")
+NOTIFY_CHANNEL_ID = int(os.getenv("NOTIFY_CHANNEL_ID", 0)) or None
 
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.getenv("GCP_SECRET_FILE")
 
@@ -138,6 +139,72 @@ async def wait_for_minecraft(hosts: list[str], timeout: int = 420) -> bool:
     return False
 
 
+_idle_empty_minutes = 0
+_idle_last_vm_status: str | None = None
+_idle_warned_25 = False
+_idle_warned_30 = False
+
+
+@tasks.loop(minutes=1)
+async def idle_watcher():
+    global _idle_empty_minutes, _idle_last_vm_status, _idle_warned_25, _idle_warned_30
+
+    if not NOTIFY_CHANNEL_ID:
+        return
+    channel = bot.get_channel(NOTIFY_CHANNEL_ID)
+    if not channel:
+        return
+
+    try:
+        instance = await asyncio.to_thread(get_instance)
+        status = instance.status
+    except Exception as e:
+        logger.warning(f"idle_watcher: failed to get instance: {e}")
+        return
+
+    if _idle_last_vm_status == "RUNNING" and status in ("STOPPED", "TERMINATED"):
+        _idle_empty_minutes = 0
+        _idle_warned_25 = False
+        _idle_warned_30 = False
+        await channel.send("💤 Minecraft server is offline.")
+
+    _idle_last_vm_status = status
+
+    if status != "RUNNING":
+        return
+
+    try:
+        external_ip = instance.network_interfaces[0].access_configs[0].nat_i_p
+    except (IndexError, AttributeError):
+        return
+
+    players_str = await asyncio.to_thread(_get_player_count, external_ip)
+    if players_str is None:
+        return
+
+    current = int(players_str.split("/")[0])
+
+    if current > 0:
+        _idle_empty_minutes = 0
+        _idle_warned_25 = False
+        _idle_warned_30 = False
+    else:
+        _idle_empty_minutes += 1
+        logger.debug(f"idle_watcher: empty for {_idle_empty_minutes} min")
+
+        if _idle_empty_minutes >= 30 and not _idle_warned_30:
+            _idle_warned_30 = True
+            await channel.send("🔴 Server empty for 30 minutes — shutting down now.")
+        elif _idle_empty_minutes >= 25 and not _idle_warned_25:
+            _idle_warned_25 = True
+            await channel.send("⚠️ Server empty for 25 minutes — closing in ~5 minutes.")
+
+
+@idle_watcher.before_loop
+async def before_idle_watcher():
+    await bot.wait_until_ready()
+
+
 @bot.event
 async def on_ready():
     if DEV_GUILD_ID:
@@ -149,6 +216,8 @@ async def on_ready():
         await bot.tree.sync()
     else:
         await bot.tree.sync()
+    if not idle_watcher.is_running():
+        idle_watcher.start()
     logger.info(f"Logged in as {bot.user}")
 
 
