@@ -151,8 +151,10 @@ async def idle_watcher():
 
     if not NOTIFY_CHANNEL_ID:
         return
-    channel = bot.get_channel(NOTIFY_CHANNEL_ID)
-    if not channel:
+    try:
+        channel = await bot.fetch_channel(NOTIFY_CHANNEL_ID)
+    except Exception as e:
+        logger.error(f"idle_watcher: cannot fetch channel {NOTIFY_CHANNEL_ID}: {e}")
         return
 
     try:
@@ -203,6 +205,11 @@ async def idle_watcher():
 @idle_watcher.before_loop
 async def before_idle_watcher():
     await bot.wait_until_ready()
+
+
+@idle_watcher.error
+async def idle_watcher_error(error):
+    logger.error(f"idle_watcher crashed: {error}")
 
 
 @bot.event
