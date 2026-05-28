@@ -102,6 +102,16 @@ def _try_rcon(host: str) -> None:
         socket.setdefaulttimeout(prev)
 
 
+def _rcon_say(host: str, message: str) -> None:
+    prev = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(10)
+    try:
+        with _MCRcon(host, RCON_PASSWORD, port=RCON_PORT) as mcr:
+            mcr.command(f"say {message}")
+    finally:
+        socket.setdefaulttimeout(prev)
+
+
 def _get_player_count(host: str) -> str | None:
     prev = socket.getdefaulttimeout()
     socket.setdefaulttimeout(5)
@@ -170,6 +180,12 @@ async def idle_watcher():
         _idle_warned_30 = False
         logger.warning(f"idle_watcher: VM transitioned RUNNING → {status}")
         await channel.send("💤 Minecraft server is offline.")
+        await bot.change_presence(status=discord.Status.idle, activity=discord.Game("⚫ MC offline"))
+        if isinstance(channel, discord.TextChannel):
+            try:
+                await channel.edit(topic="⚫ MC offline")
+            except discord.Forbidden:
+                logger.warning("idle_watcher: missing manage_channels permission, skipping topic clear")
 
     _idle_last_vm_status = status
 
@@ -201,6 +217,11 @@ async def idle_watcher():
         elif _idle_empty_minutes >= 25 and not _idle_warned_25:
             _idle_warned_25 = True
             await channel.send("⚠️ Server empty for 25 minutes — closing in ~5 minutes.")
+            try:
+                await asyncio.to_thread(_rcon_say, external_ip, "Server auto-shutting down in ~5 minutes, find shelter!")
+                logger.info("idle_watcher: RCON 25-min warning sent")
+            except Exception as e:
+                logger.warning(f"idle_watcher: RCON warning skipped: {e}")
 
 
 @idle_watcher.before_loop
@@ -226,6 +247,7 @@ async def on_ready():
         await bot.tree.sync()
     if not idle_watcher.is_running():
         idle_watcher.start()
+    await bot.change_presence(status=discord.Status.idle, activity=discord.Game("⚫ MC offline"))
     logger.info(f"Logged in as {bot.user}")
 
 
@@ -233,32 +255,47 @@ async def on_ready():
 @is_whitelisted()
 async def mc_start(interaction):
     logger.info(f"mc-start invoked by {interaction.user}")
-    await interaction.response.send_message(
-        "🟡 Starting Minecraft server..."
-    )
+    await interaction.response.send_message("🟡 Starting Minecraft server...")
 
     client = compute_v1.InstancesClient()
 
-    operation = await asyncio.to_thread(
-        client.start,
-        project=PROJECT_ID,
-        zone=ZONE,
-        instance=INSTANCE_NAME,
-    )
-
-    logger.debug("Waiting for VM to start...")
-    await asyncio.to_thread(operation.result)
+    try:
+        operation = await asyncio.to_thread(
+            client.start,
+            project=PROJECT_ID,
+            zone=ZONE,
+            instance=INSTANCE_NAME,
+        )
+        logger.debug("Waiting for VM to start...")
+        await asyncio.to_thread(operation.result)
+    except Exception as e:
+        logger.error(f"mc-start: GCP error: {e}")
+        await interaction.followup.send(f"❌ Failed to start VM: {e}")
+        return
 
     logger.info("VM started, waiting for Minecraft to initialize...")
     await interaction.followup.send("🟢 VM started. Waiting for Minecraft to initialize...")
 
-    instance = await asyncio.to_thread(get_instance)
-    external_ip = instance.network_interfaces[0].access_configs[0].nat_i_p
+    try:
+        instance = await asyncio.to_thread(get_instance)
+        external_ip = instance.network_interfaces[0].access_configs[0].nat_i_p
+    except Exception as e:
+        logger.error(f"mc-start: failed to get instance IP: {e}")
+        await interaction.followup.send(f"❌ Failed to get VM info: {e}")
+        return
 
     ready = await wait_for_minecraft([external_ip])
     if ready:
         logger.info("Minecraft server ready")
         await interaction.followup.send(f"✅ {interaction.user.mention} Minecraft server is ready! Connect now.")
+        await bot.change_presence(status=discord.Status.online, activity=discord.Game("🟢 MC online"))
+        if NOTIFY_CHANNEL_ID:
+            channel = bot.get_channel(NOTIFY_CHANNEL_ID)
+            if isinstance(channel, discord.TextChannel):
+                try:
+                    await channel.edit(topic=f"🟢 MC online — {external_ip}")
+                except discord.Forbidden:
+                    logger.warning("mc-start: missing manage_channels permission, skipping topic update")
     else:
         logger.warning("Minecraft did not initialize within timeout")
         await interaction.followup.send("⚠️ VM running but Minecraft didn't start in time. Check server logs.")
@@ -269,7 +306,14 @@ async def mc_start(interaction):
 async def mc_status(interaction):
     logger.info(f"mc-status invoked by {interaction.user}")
     await interaction.response.defer()
-    instance = await asyncio.to_thread(get_instance)
+
+    try:
+        instance = await asyncio.to_thread(get_instance)
+    except Exception as e:
+        logger.error(f"mc-status: GCP error: {e}")
+        await interaction.followup.send(f"❌ Failed to get VM status: {e}")
+        return
+
     status = instance.status
     logger.debug(f"VM status: {status}")
 
@@ -286,22 +330,34 @@ async def mc_status(interaction):
 @is_whitelisted()
 async def mc_stop(interaction):
     logger.info(f"mc-stop invoked by {interaction.user}")
-    await interaction.response.send_message(
-        "🔴 Stopping Minecraft VM..."
-    )
+    await interaction.response.send_message("⚠️ Sending shutdown warning... stopping in 60 seconds.")
+
+    try:
+        instance = await asyncio.to_thread(get_instance)
+        external_ip = instance.network_interfaces[0].access_configs[0].nat_i_p
+        await asyncio.to_thread(_rcon_say, external_ip, "Server shutting down in 60 seconds, find shelter!")
+        logger.info("mc-stop: RCON shutdown warning sent")
+    except Exception as e:
+        logger.warning(f"mc-stop: RCON warning skipped: {e}")
+
+    await asyncio.sleep(60)
 
     client = compute_v1.InstancesClient()
-
-    client.stop(
-        project=PROJECT_ID,
-        zone=ZONE,
-        instance=INSTANCE_NAME
-    )
+    try:
+        await asyncio.to_thread(
+            client.stop,
+            project=PROJECT_ID,
+            zone=ZONE,
+            instance=INSTANCE_NAME,
+        )
+    except Exception as e:
+        logger.error(f"mc-stop: GCP error: {e}")
+        await interaction.followup.send(f"❌ Failed to stop VM: {e}")
+        return
 
     logger.info("VM stop requested")
-    await interaction.followup.send(
-        "✅ VM stopped"
-    )
+    await interaction.followup.send("✅ VM stop requested.")
+    await bot.change_presence(status=discord.Status.idle, activity=discord.Game("⚫ MC offline"))
 
 
 @bot.tree.command(name="mc-allow", description="Allow a user to use MC commands")
