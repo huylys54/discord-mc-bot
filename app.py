@@ -190,7 +190,7 @@ async def idle_watcher():
         _idle_warned_30 = False
     else:
         _idle_empty_minutes += 1
-        logger.debug(f"idle_watcher: empty for {_idle_empty_minutes} min")
+        logger.info(f"idle_watcher: empty for {_idle_empty_minutes} min")
 
         if _idle_empty_minutes >= 30 and not _idle_warned_30:
             _idle_warned_30 = True
