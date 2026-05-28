@@ -168,6 +168,7 @@ async def idle_watcher():
         _idle_empty_minutes = 0
         _idle_warned_25 = False
         _idle_warned_30 = False
+        logger.warning(f"idle_watcher: VM transitioned RUNNING → {status}")
         await channel.send("💤 Minecraft server is offline.")
 
     _idle_last_vm_status = status
