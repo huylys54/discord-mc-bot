@@ -151,13 +151,12 @@ async def wait_for_minecraft(hosts: list[str], timeout: int = 420) -> bool:
 
 _idle_empty_minutes = 0
 _idle_last_vm_status: str | None = None
-_idle_warned_25 = False
-_idle_warned_30 = False
+_idle_warned_minutes: set[int] = set()
 
 
 @tasks.loop(minutes=1)
 async def idle_watcher():
-    global _idle_empty_minutes, _idle_last_vm_status, _idle_warned_25, _idle_warned_30
+    global _idle_empty_minutes, _idle_last_vm_status, _idle_warned_minutes
 
     if not NOTIFY_CHANNEL_ID:
         return
@@ -176,8 +175,7 @@ async def idle_watcher():
 
     if _idle_last_vm_status == "RUNNING" and status in ("STOPPED", "TERMINATED"):
         _idle_empty_minutes = 0
-        _idle_warned_25 = False
-        _idle_warned_30 = False
+        _idle_warned_minutes.clear()
         logger.warning(f"idle_watcher: VM transitioned RUNNING → {status}")
         await channel.send("💤 Minecraft server is offline.")
         await bot.change_presence(status=discord.Status.idle, activity=discord.Game("⚫ MC offline"))
@@ -205,23 +203,28 @@ async def idle_watcher():
 
     if current > 0:
         _idle_empty_minutes = 0
-        _idle_warned_25 = False
-        _idle_warned_30 = False
+        _idle_warned_minutes.clear()
     else:
         _idle_empty_minutes += 1
         logger.info(f"idle_watcher: empty for {_idle_empty_minutes} min")
 
-        if _idle_empty_minutes >= 30 and not _idle_warned_30:
-            _idle_warned_30 = True
+        if _idle_empty_minutes >= 30 and 30 not in _idle_warned_minutes:
+            _idle_warned_minutes.add(30)
             await channel.send("🔴 Server empty for 30 minutes — shutting down now.")
-        elif _idle_empty_minutes >= 25 and not _idle_warned_25:
-            _idle_warned_25 = True
+        elif _idle_empty_minutes >= 25 and 25 not in _idle_warned_minutes:
+            _idle_warned_minutes.add(25)
             await channel.send("⚠️ Server empty for 25 minutes — closing in ~5 minutes.")
             try:
                 await asyncio.to_thread(_rcon_say, external_ip, "Server auto-shutting down in ~5 minutes, find shelter!")
                 logger.info("idle_watcher: RCON 25-min warning sent")
             except Exception as e:
                 logger.warning(f"idle_watcher: RCON warning skipped: {e}")
+        elif _idle_empty_minutes >= 20 and 20 not in _idle_warned_minutes:
+            _idle_warned_minutes.add(20)
+            await channel.send("⚠️ Server empty for 20 minutes — shutting down in 10 minutes if no one joins.")
+        elif _idle_empty_minutes >= 15 and 15 not in _idle_warned_minutes:
+            _idle_warned_minutes.add(15)
+            await channel.send("⚠️ Server empty for 15 minutes — shutting down in 15 minutes if no one joins.")
 
 
 @idle_watcher.before_loop
@@ -287,7 +290,12 @@ async def mc_start(interaction):
     ready = await wait_for_minecraft([external_ip])
     if ready:
         logger.info("Minecraft server ready")
-        await interaction.followup.send(f"✅ {interaction.user.mention} Minecraft server is ready! Connect now.")
+        players_str = await asyncio.to_thread(_get_player_count, external_ip)
+        embed = discord.Embed(colour=0x00b300, title="✅ Minecraft server is ready!")
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        embed.add_field(name="IP", value=external_ip, inline=True)
+        embed.add_field(name="Players", value=f"{players_str} players" if players_str else "? players", inline=True)
+        await interaction.followup.send(interaction.user.mention, embed=embed)
         await bot.change_presence(status=discord.Status.online, activity=discord.Game("🟢 MC online"))
         if NOTIFY_CHANNEL_ID:
             channel = bot.get_channel(NOTIFY_CHANNEL_ID)
