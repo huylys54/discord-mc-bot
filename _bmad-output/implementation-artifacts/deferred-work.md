@@ -5,6 +5,10 @@
 - **First Blood Ping** — `/mc-start --watch`; polls RCON post-start, pings starter when first player joins
 - **Session Intent** — optional `reason` param on `/mc-start`, shown in the ready notification
 
+## From spec-player-xp-2-mc-status-dashboard (2026-05-30)
+
+- `app.py:132,116` — `_get_players` and `_get_player_count` duplicate the RCON connection + timeout-restore boilerplate. Candidate for extraction into a shared `_rcon_command(host, cmd)` helper when a third RCON function is needed.
+
 ## From spec-quick-wins-dashboard-countdown (2026-05-30)
 
 - `app.py:213` — `idle_watcher` 30-min branch sends "shutting down now" but the bot never issues a GCP stop command; VM self-terminates via its own idle policy. Message is accurate by design (per CLAUDE.md) but could be confusing if the VM's idle policy is ever changed.
