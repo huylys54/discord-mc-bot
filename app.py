@@ -216,6 +216,11 @@ async def idle_watcher():
             except discord.Forbidden:
                 logger.warning("idle_watcher: missing manage_channels permission, skipping topic clear")
 
+    if _idle_last_vm_status != "RUNNING" and status == "RUNNING":
+        _idle_empty_minutes = 0
+        _idle_warned_minutes.clear()
+        logger.info("idle_watcher: VM became RUNNING — resetting idle counters")
+
     _idle_last_vm_status = status
 
     if status != "RUNNING":
