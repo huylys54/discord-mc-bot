@@ -3,6 +3,7 @@ import re
 import json
 import socket
 import asyncio
+from datetime import datetime, timezone
 import discord
 import mcrcon
 from discord.ext import commands, tasks
@@ -126,6 +127,36 @@ def _get_player_count(host: str) -> str | None:
         return None
     finally:
         socket.setdefaulttimeout(prev)
+
+
+def _get_players(host: str) -> tuple[str, list[str]] | None:
+    prev = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(5)
+    try:
+        with _MCRcon(host, RCON_PASSWORD, port=RCON_PORT) as mcr:
+            response = mcr.command("list")
+        match = re.search(r"(\d+).*?of.*?(\d+)", response)
+        if not match:
+            return None
+        count_str = f"{match.group(1)}/{match.group(2)}"
+        parts = response.split(":", 1)
+        names = [n.strip() for n in parts[1].split(",") if n.strip()] if len(parts) > 1 else []
+        return count_str, names
+    except Exception:
+        return None
+    finally:
+        socket.setdefaulttimeout(prev)
+
+
+def _fmt_uptime(ts: str) -> str:
+    try:
+        start = datetime.fromisoformat(ts)
+        delta = datetime.now(timezone.utc) - start.astimezone(timezone.utc)
+        total_minutes = max(0, int(delta.total_seconds() // 60))
+        h, m = divmod(total_minutes, 60)
+        return f"{h}h {m:02d}m" if h else f"{m}m"
+    except Exception:
+        return "—"
 
 
 async def wait_for_minecraft(hosts: list[str], timeout: int = 420) -> bool:
@@ -325,13 +356,39 @@ async def mc_status(interaction):
     status = instance.status
     logger.debug(f"VM status: {status}")
 
+    W = 26
+    top = "╔" + "═" * 30 + "╗"
+    bottom = "╚" + "═" * 30 + "╝"
+
+    def line(content: str) -> str:
+        return f"║  {content:<{W}}  ║"
+
     if status == "RUNNING":
-        external_ip = instance.network_interfaces[0].access_configs[0].nat_i_p
-        players = await asyncio.to_thread(_get_player_count, external_ip)
-        player_info = f" — {players} players" if players else ""
-        await interaction.followup.send(f"🟢 **{status}**{player_info}")
+        try:
+            external_ip = instance.network_interfaces[0].access_configs[0].nat_i_p
+        except (IndexError, AttributeError):
+            external_ip = None
+
+        result = await asyncio.to_thread(_get_players, external_ip) if external_ip else None
+        count_str, names = result if result else ("—", [])
+        uptime = _fmt_uptime(instance.last_start_timestamp or "")
+
+        rows = [
+            top,
+            line("MC SERVER — ONLINE"),
+            line(f"Uptime : {uptime}"),
+            line(f"Players: {count_str}"),
+        ]
+        for name in names:
+            rows.append(line(f"  • {name}"))
+        rows.append(bottom)
+        status_icon = "🟢"
     else:
-        await interaction.followup.send(f"🔴 **{status}**")
+        rows = [top, line("MC SERVER — OFFLINE"), bottom]
+        status_icon = "🔴"
+
+    panel = "\n".join(rows)
+    await interaction.followup.send(f"{status_icon}\n```\n{panel}\n```")
 
 
 @bot.tree.command(name="mc-stop", description="Stop Minecraft VM")
