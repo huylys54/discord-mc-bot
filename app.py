@@ -183,6 +183,7 @@ async def wait_for_minecraft(hosts: list[str], timeout: int = 420) -> bool:
 _idle_empty_minutes = 0
 _idle_last_vm_status: str | None = None
 _idle_warned_minutes: set[int] = set()
+_health_consecutive_failures: int = 0
 
 
 @tasks.loop(minutes=1)
@@ -232,6 +233,9 @@ async def idle_watcher():
         return
 
     players_str = await asyncio.to_thread(_get_player_count, external_ip)
+    uptime = _fmt_uptime(instance.last_start_timestamp or "")
+    count_display = players_str if players_str is not None else "?/?"
+    await bot.change_presence(status=discord.Status.online, activity=discord.Game(f"🟢 MC | {uptime} | {count_display}"))
     if players_str is None:
         return
 
@@ -273,6 +277,44 @@ async def idle_watcher_error(error):
     logger.error(f"idle_watcher crashed: {error}")
 
 
+@tasks.loop(minutes=5)
+async def health_checker():
+    global _health_consecutive_failures
+    if _idle_last_vm_status != "RUNNING":
+        _health_consecutive_failures = 0
+        return
+    if not NOTIFY_CHANNEL_ID:
+        return
+    try:
+        instance = await asyncio.to_thread(get_instance)
+        external_ip = instance.network_interfaces[0].access_configs[0].nat_i_p
+    except Exception as e:
+        logger.warning(f"health_checker: failed to get instance: {e}")
+        return
+    try:
+        await asyncio.to_thread(_try_rcon, external_ip)
+        _health_consecutive_failures = 0
+    except Exception:
+        _health_consecutive_failures += 1
+        logger.warning(f"health_checker: RCON unreachable ({_health_consecutive_failures} consecutive)")
+        if _health_consecutive_failures == 3:
+            try:
+                channel = await bot.fetch_channel(NOTIFY_CHANNEL_ID)
+                await channel.send("🚨 Minecraft RCON unreachable for 15 minutes — server may have crashed.")
+            except Exception as e:
+                logger.error(f"health_checker: cannot send alert: {e}")
+
+
+@health_checker.before_loop
+async def before_health_checker():
+    await bot.wait_until_ready()
+
+
+@health_checker.error
+async def health_checker_error(error):
+    logger.error(f"health_checker crashed: {error}")
+
+
 @bot.event
 async def on_ready():
     if DEV_GUILD_ID:
@@ -286,13 +328,16 @@ async def on_ready():
         await bot.tree.sync()
     if not idle_watcher.is_running():
         idle_watcher.start()
+    if not health_checker.is_running():
+        health_checker.start()
     await bot.change_presence(status=discord.Status.idle, activity=discord.Game("⚫ MC offline"))
     logger.info(f"Logged in as {bot.user}")
 
 
 @bot.tree.command(name="mc-start", description="Start Minecraft VM")
+@discord.app_commands.describe(reason="Why are you starting the server?")
 @is_whitelisted()
-async def mc_start(interaction):
+async def mc_start(interaction, reason: str | None = None):
     logger.info(f"mc-start invoked by {interaction.user}")
     await interaction.response.send_message("🟡 Starting Minecraft server...")
 
@@ -331,6 +376,8 @@ async def mc_start(interaction):
         embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
         embed.add_field(name="IP", value=external_ip, inline=True)
         embed.add_field(name="Players", value=f"{players_str} players" if players_str else "? players", inline=True)
+        if reason:
+            embed.add_field(name="Reason", value=reason[:1024], inline=False)
         await interaction.followup.send(interaction.user.mention, embed=embed)
         await bot.change_presence(status=discord.Status.online, activity=discord.Game("🟢 MC online"))
         if NOTIFY_CHANNEL_ID:
